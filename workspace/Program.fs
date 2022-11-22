@@ -1,16 +1,18 @@
 ﻿open System
-open NUnit.Engine
 open System.Reflection
 open System.Xml
 open System.Globalization
 
+open NUnit.Engine
+
+type TestResult = Unknown | Passed | Failed
+
 [<EntryPoint>]
 let main argv =
-
     let GetAttribute (node: XmlNode) (name: string): string option =
         match node with
         | null -> None
-        | elem -> match node.Attributes.[name] with
+        | elem -> match elem.Attributes.[name] with
                   | null -> None
                   | a -> Some(a.Value)
 
@@ -27,7 +29,15 @@ let main argv =
 
     let escapeLF(s: string): string = s.Replace(Environment.NewLine, "<:LF:>")
 
-    let OnTestCase(testCase: XmlNode) =
+    let GetSuiteResult (testResults: TestResult seq) = 
+        let GetResultScore (result: TestResult): int =
+            match result with
+                | Passed  -> 0
+                | Unknown -> 1
+                | Failed  -> 2
+        if Seq.isEmpty testResults then Unknown else Seq.maxBy GetResultScore testResults
+
+    let OnTestCase(testCase: XmlNode): TestResult =
 
         GetDescription testCase
         |> Option.orElse  (GetAttribute testCase "name")
@@ -38,77 +48,94 @@ let main argv =
         |> Option.ofObj
         |> Option.iter (fun node -> printfn "%s" node.InnerText)
 
-        match GetAttribute testCase "result" with
-        | Some("Passed") -> printfn "\n<PASSED::>Test Passed"
-        | Some("Failed") ->
-            let label = GetAttribute testCase "label"
-            let message = Option.ofObj <| testCase.SelectSingleNode "failure/message"
-            match label with
-            | Some("Error") ->
-                message
-                |> Option.map (fun m -> escapeLF(m.InnerText))
-                |> Option.defaultValue "Unknown Error"
-                |> printfn "\n<ERROR::>%s"
+        let testCaseResult =
+            match GetAttribute testCase "result" with
+            | Some("Passed") ->
+                printfn "\n<PASSED::>Test Passed"
+                Passed
+            | Some("Failed") ->
+                let label = GetAttribute testCase "label"
+                let message = Option.ofObj <| testCase.SelectSingleNode "failure/message"
+                match label with
+                | Some("Error") ->
+                    message
+                    |> Option.map (fun m -> escapeLF(m.InnerText))
+                    |> Option.defaultValue "Unknown Error"
+                    |> printfn "\n<ERROR::>%s"
 
-                testCase.SelectSingleNode "failure/stack-trace"
-                |> Option.ofObj
-                |> Option.iter (fun node -> printfn "\n<LOG::-Stack Trace>%s" node.InnerText)
-            | _ ->
-                message
-                |> Option.map (fun msg -> "<:LF:>" + escapeLF msg.InnerText)
-                |> Option.defaultValue ""
-                |> printfn "\n<FAILED::>Test Failed%s"
-        | _ -> ()
+                    testCase.SelectSingleNode "failure/stack-trace"
+                    |> Option.ofObj
+                    |> Option.iter (fun node -> printfn "\n<LOG::-Stack Trace>%s" node.InnerText)
+                | _ ->
+                    message
+                    |> Option.map (fun msg -> "<:LF:>" + escapeLF msg.InnerText)
+                    |> Option.defaultValue ""
+                    |> printfn "\n<FAILED::>Test Failed%s"
+                Failed
+            | _ -> Unknown
         WriteCompletedIn testCase
+        testCaseResult
 
-
-    let rec OnTestSuiteTestFixture(testFixture: XmlNode) =
-
+    let rec OnTestSuiteTestFixture(testFixture: XmlNode): TestResult =
         GetDescription testFixture
         |> Option.orElse  (GetAttribute testFixture "name")
         |> Option.defaultValue ""
         |> printfn "\n<DESCRIBE::>%s"
 
-        for child in testFixture.ChildNodes do
-            match child.Name with
-            | "test-suite" ->
-                match GetAttribute child "type" with
-                | Some("ParameterizedMethod" | "GenericMethod") -> OnTestSuiteTestFixture(child)
-                | _ -> ()
-            | "test-case" ->  OnTestCase(child)
-            | _ -> ()
-        WriteCompletedIn(testFixture);
+        let suiteResult =
+            testFixture.ChildNodes
+            |> Seq.cast<XmlNode> |> Seq.toList
+            |> List.map (fun child ->
+                match child.Name with
+                | "test-suite" ->
+                    match GetAttribute child "type" with
+                    | Some("ParameterizedMethod" | "GenericMethod") -> OnTestSuiteTestFixture(child)
+                    | _ -> Passed
+                | "test-case" ->  OnTestCase(child)
+                | _ -> Passed )
+            |> GetSuiteResult
+        WriteCompletedIn(testFixture)
+        suiteResult
 
-    let rec OnTestSuiteTestSuite(testSuite: XmlNode) =
+    let rec OnTestSuiteTestSuite(testSuite: XmlNode): TestResult =
 
         GetDescription testSuite
         |> Option.orElse  (GetAttribute testSuite "name")
         |> Option.defaultValue ""
         |> printfn "\n<DESCRIBE::>%s"
 
-        for child in testSuite.SelectNodes "test-suite" do
+        let suiteResult = 
+            testSuite.SelectNodes "test-suite"
+            |> Seq.cast<XmlElement> |> Seq.toList
+            |> List.map (fun child ->
+                match GetAttribute child "type" with
+                | Some("TestFixture") -> OnTestSuiteTestFixture(child)
+                | _ -> OnTestSuiteTestSuite(child) )
+            |> GetSuiteResult
+
+        WriteCompletedIn(testSuite)
+
+        suiteResult
+
+
+    let OnTestSuiteAssembly(testSuite: XmlNode): TestResult =        
+        testSuite.SelectNodes "test-suite"
+        |> Seq.cast<XmlElement> |> Seq.toList
+        |> List.map (fun child ->
             match GetAttribute child "type" with
             | Some("TestFixture") -> OnTestSuiteTestFixture(child)
-            | _ -> OnTestSuiteTestSuite(child)
+            | _ -> OnTestSuiteTestSuite(child) )
+        |> GetSuiteResult
+        
 
-        WriteCompletedIn(testSuite);
-
-
-    let OnTestSuiteAssembly(testSuite: XmlNode) =
-        for child in testSuite.SelectNodes "test-suite" do
-            match GetAttribute child "type" with
-            | Some("TestFixture") -> OnTestSuiteTestFixture(child)
-            | _ -> OnTestSuiteTestSuite(child)
-
-    let reportRun (reportNode: XmlNode) =
+    let reportRun (reportNode: XmlNode): TestResult =
         reportNode.SelectSingleNode "test-suite[@type = 'Assembly']"
         |> Option.ofObj
-        |> Option.iter OnTestSuiteAssembly
+        |> Option.map OnTestSuiteAssembly
+        |> Option.defaultValue Unknown
 
     let testpkg = new TestPackage (Assembly.GetExecutingAssembly().Location)
     let engine = new TestEngine()
     use runner = engine.GetRunner(testpkg)
     let reportNode = runner.Run(null, TestFilter.Empty)
-    // TODO Exit code
-    reportRun(reportNode)
-    0
+    if reportRun(reportNode) = Passed then 0 else 1
