@@ -27,13 +27,8 @@ RUN set -ex; \
     dotnet restore; \
 # Copy all the necessary files to bin/
     dotnet build --no-restore; \
-# Remove obj/ to get the verbose output to extract reference paths
-    rm -rf bin/Debug/net6.0/run.pdb obj; \
-# Append reference paths to `cnfig.rsp`
-    dotnet run --verbosity normal | grep '\-r:' >> config.rsp; \
 # Sanity check
-    fsc @config.rsp Preloaded.fs Solution.fs Tests.fs Program.fs; \
-    dotnet bin/Debug/net6.0/run.dll; \
+    dotnet run; \
 # Remove examples
     rm Preloaded.fs Solution.fs Tests.fs bin/Debug/net6.0/run.dll;
 

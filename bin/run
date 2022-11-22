@@ -8,8 +8,7 @@ fi
 W=/workspace
 
 # Create container
-# Note that Program.fs must come last
-C=$(docker container create --rm -w $W $IMAGE sh -c "fsc @config.rsp Preloaded.fs Solution.fs Tests.fs Program.fs && dotnet run bin/Debug/net6.0/run.dll")
+C=$(docker container create --rm -w $W $IMAGE dotnet run)
 
 # Copy files from the examples directory
 docker container cp examples/${1:-passing}/. $C:$W
