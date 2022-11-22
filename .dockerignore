@@ -1,0 +1,4 @@
+workspace/*/.vscode/
+workspace/*/bin/
+workspace/*/obj/
+workspace/*/*.log

@@ -1,0 +1,33 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.repository == 'codewars/fsharp' }}
+    steps:
+      - uses: actions/checkout@v2
+      - uses: docker/setup-buildx-action@v2
+
+      - name: Build image
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: false
+          # Make the image available in next step
+          load: true
+          tags: ghcr.io/codewars/fsharp:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Passing Example
+        run: bin/run passing
+
+      - name: Report Image Size
+        run: |
+          echo "## Image Size" >> $GITHUB_STEP_SUMMARY
+          docker image inspect --format '{{.Size}}' ghcr.io/codewars/fsharp:latest | numfmt --to=si --suffix=B >> $GITHUB_STEP_SUMMARY
